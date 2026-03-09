@@ -1062,7 +1062,7 @@ class ZepToolsService:
                         "related_facts": related_facts  # Full output without truncation.
                     })
             except Exception as e:
-                    logger.debug(f"Failed to fetch node {uuid}: {e}")
+                logger.debug(f"Failed to fetch node {uuid}: {e}")
                 continue
         
         result.entity_insights = entity_insights
