@@ -17,9 +17,8 @@ from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 
-from openai import OpenAI
-
 from ..config import Config
+from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger, log_llm_interaction
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
@@ -224,23 +223,10 @@ class SimulationConfigGenerator:
     AGENT_SUMMARY_LENGTH = 300           # Entity summary in agent config generation
     ENTITIES_PER_TYPE_DISPLAY = 20       # Displayed entities per type
     
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model_name: Optional[str] = None
-    ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY is not configured")
-        
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+    def __init__(self):
+        self.llm = LLMClient()
+        self.model_name = "claude-agent-sdk"
+        self.base_url = ""
     
     def generate_config(
         self,
@@ -436,56 +422,30 @@ class SimulationConfigGenerator:
     def _call_llm_with_retry(self, prompt: str, system_prompt: str) -> Dict[str, Any]:
         """LLM call with retries and JSON repair logic."""
         import re
-        
+
         max_attempts = 3
         last_error = None
-        
+
         for attempt in range(max_attempts):
             try:
                 messages = [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt}
                 ]
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    temperature=0.7 - (attempt * 0.1)  # Lower temperature on each retry
-                    # Do not set max_tokens to allow full model output
-                )
-                
-                content = response.choices[0].message.content
-                log_llm_interaction(
-                    source_file="simulation_config_generator.py",
-                    messages=messages,
-                    response_text=(content or "").strip(),
-                )
-                finish_reason = response.choices[0].finish_reason
-                
-                # Check if output was truncated
-                if finish_reason == 'length':
-                    logger.warning(f"LLM output truncated (attempt {attempt+1})")
-                    content = self._fix_truncated_json(content)
-                
-                # Try parsing JSON
-                try:
-                    return json.loads(content)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parse failed (attempt {attempt+1}): {str(e)[:80]}")
-                    
-                    # Try fixing JSON
-                    fixed = self._try_fix_config_json(content)
-                    if fixed:
-                        return fixed
-                    
-                    last_error = e
-                    
+
+                result = self.llm.chat_json(messages=messages)
+                return result
+
+            except (ValueError, json.JSONDecodeError) as e:
+                logger.warning(f"JSON parse failed (attempt {attempt+1}): {str(e)[:80]}")
+                last_error = e
+
             except Exception as e:
                 logger.warning(f"LLM call failed (attempt {attempt+1}): {str(e)[:80]}")
                 last_error = e
                 import time
                 time.sleep(2 * (attempt + 1))
-        
+
         raise last_error or Exception("LLM call failed")
     
     def _fix_truncated_json(self, content: str) -> str:

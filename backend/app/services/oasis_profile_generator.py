@@ -15,10 +15,10 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from openai import OpenAI
 from zep_cloud.client import Zep
 
 from ..config import Config
+from ..utils.llm_client import LLMClient
 from ..utils.logger import get_logger, log_llm_interaction
 from .zep_entity_reader import EntityNode, ZepEntityReader
 
@@ -178,24 +178,11 @@ class OasisProfileGenerator:
     ]
     
     def __init__(
-        self, 
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model_name: Optional[str] = None,
+        self,
         zep_api_key: Optional[str] = None,
         graph_id: Optional[str] = None
     ):
-        self.api_key = api_key or Config.LLM_API_KEY
-        self.base_url = base_url or Config.LLM_BASE_URL
-        self.model_name = model_name or Config.LLM_MODEL_NAME
-        
-        if not self.api_key:
-            raise ValueError("LLM_API_KEY is not configured")
-        
-        self.client = OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+        self.llm = LLMClient()
         
         # Zep client for rich context retrieval
         self.zep_api_key = zep_api_key or Config.ZEP_API_KEY
@@ -530,49 +517,20 @@ class OasisProfileGenerator:
                     {"role": "system", "content": self._get_system_prompt(is_individual)},
                     {"role": "user", "content": prompt}
                 ]
-                response = self.client.chat.completions.create(
-                    model=self.model_name,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    temperature=0.7 - (attempt * 0.1)  # Lower temperature on each retry
-                    # Do not set max_tokens; allow LLM to decide
-                )
-                
-                content = response.choices[0].message.content
-                log_llm_interaction(
-                    source_file="oasis_profile_generator.py",
-                    messages=messages,
-                    response_text=(content or "").strip(),
-                )
-                
-                # Check truncation (finish_reason is not 'stop')
-                finish_reason = response.choices[0].finish_reason
-                if finish_reason == 'length':
-                    logger.warning(f"LLM output was truncated (attempt {attempt+1}), trying to fix...")
-                    content = self._fix_truncated_json(content)
-                
-                # Try parsing JSON
-                try:
-                    result = json.loads(content)
-                    
-                    # Validate required fields
-                    if "bio" not in result or not result["bio"]:
-                        result["bio"] = entity_summary[:200] if entity_summary else f"{entity_type}: {entity_name}"
-                    if "persona" not in result or not result["persona"]:
-                        result["persona"] = entity_summary or f"{entity_name} is a {entity_type}."
-                    
-                    return result
-                    
-                except json.JSONDecodeError as je:
-                    logger.warning(f"JSON parsing failed (attempt {attempt+1}): {str(je)[:80]}")
-                    
-                    # Try to fix JSON
-                    result = self._try_fix_json(content, entity_name, entity_type, entity_summary)
-                    if result.get("_fixed"):
-                        del result["_fixed"]
-                        return result
-                    
-                    last_error = je
+
+                result = self.llm.chat_json(messages=messages)
+
+                # Validate required fields
+                if "bio" not in result or not result["bio"]:
+                    result["bio"] = entity_summary[:200] if entity_summary else f"{entity_type}: {entity_name}"
+                if "persona" not in result or not result["persona"]:
+                    result["persona"] = entity_summary or f"{entity_name} is a {entity_type}."
+
+                return result
+
+            except (ValueError, json.JSONDecodeError) as je:
+                logger.warning(f"JSON parsing failed (attempt {attempt+1}): {str(je)[:80]}")
+                last_error = je
                     
             except Exception as e:
                 logger.warning(f"LLM call failed (attempt {attempt+1}): {str(e)[:80]}")

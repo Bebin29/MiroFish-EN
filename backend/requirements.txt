@@ -10,14 +10,16 @@ flask>=3.0.0
 flask-cors>=6.0.0
 
 # ============= LLM Related =============
-# OpenAI SDK (use OpenAI format consistently for LLM calls)
+# Claude Agent SDK (uses Claude subscription, no API key needed)
+claude-agent-sdk
+# OpenAI SDK (still needed for OASIS/camel-ai simulation framework)
 openai>=1.0.0
 
 # ============= Zep Cloud =============
 zep-cloud==3.13.0
 
 # ============= OASIS Social Media Simulation =============
-# OASIS social simulation framework
+# OASIS social simulation framework (requires Python <3.12, using Python 3.11 venv)
 camel-oasis==0.2.5
 camel-ai==0.2.78
 
